@@ -1422,7 +1422,9 @@ func TestRelaySessionsWithoutConnections(t *testing.T) {
 func TestRelayConnectDispatchesMessages(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.Header.Get("Authorization") != "Bearer root" || req.Header.Get("X-Fricam-Edge-Version") != version {
+		// Fork scheme (FORK.md B1): the relay must receive the derived
+		// RelayToken, never the root secret.
+		if req.Header.Get("Authorization") != "Bearer "+deriveIdentity("root").RelayToken || req.Header.Get("X-Fricam-Edge-Version") != version {
 			http.Error(w, "auth", http.StatusUnauthorized)
 			return
 		}
@@ -1441,7 +1443,7 @@ func TestRelayConnectDispatchesMessages(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	r := newRelayController("ws"+strings.TrimPrefix(server.URL, "http"), "http://go2rtc", edgeIdentity{DeviceID: "device01", RootSecret: "root"}, &streamManager{streams: map[string]*streamCache{"front": {sourceNames: []string{"front"}}}})
+	r := newRelayController("ws"+strings.TrimPrefix(server.URL, "http"), "http://go2rtc", deriveIdentity("root"), &streamManager{streams: map[string]*streamCache{"front": {sourceNames: []string{"front"}}}})
 	err := r.connect(context.Background())
 	if err == nil || !r.connected.Load() {
 		t.Fatalf("connect err=%v connected=%v", err, r.connected.Load())

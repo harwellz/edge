@@ -370,10 +370,11 @@ func TestCameraFromPath(t *testing.T) {
 
 func TestDeriveIdentityIsStableAndSeparated(t *testing.T) {
 	identity := deriveIdentity("test-root-secret")
-	if len(identity.DeviceID) != 43 || len(identity.ClientToken) != 43 {
-		t.Fatalf("unexpected identity lengths: device=%d client=%d", len(identity.DeviceID), len(identity.ClientToken))
+	if len(identity.DeviceID) != 43 || len(identity.ClientToken) != 43 || len(identity.RelayToken) != 43 {
+		t.Fatalf("unexpected identity lengths: device=%d client=%d relay=%d", len(identity.DeviceID), len(identity.ClientToken), len(identity.RelayToken))
 	}
-	if identity.DeviceID == identity.ClientToken || identity.ClientToken == identity.RootSecret {
+	if identity.DeviceID == identity.ClientToken || identity.ClientToken == identity.RootSecret ||
+		identity.RelayToken == identity.RootSecret || identity.RelayToken == identity.ClientToken {
 		t.Fatal("derived identity values are not separated")
 	}
 	if deriveIdentity(identity.RootSecret) != identity {

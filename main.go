@@ -246,6 +246,7 @@ func runEdge() error {
 		writeJSON(w, http.StatusOK, map[string]string{
 			"deviceId":    relay.identity.DeviceID,
 			"clientToken": relay.identity.ClientToken,
+			"relayToken":  relay.identity.RelayToken,
 			"relayUrl":    relay.httpRelayURL(),
 		})
 	})
@@ -276,6 +277,7 @@ func runEdge() error {
 		writeJSON(w, http.StatusOK, map[string]string{
 			"deviceId":    relay.identity.DeviceID,
 			"clientToken": relay.identity.ClientToken,
+			"relayToken":  relay.identity.RelayToken,
 			"relayUrl":    relay.httpRelayURL(),
 		})
 	})

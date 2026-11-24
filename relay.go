@@ -31,6 +31,11 @@ import (
 const clientTokenContext = "fricam-edge-client-v1"
 const proxyTokenContext = "fricam-edge-proxy-v1:"
 
+// relayTokenContext derives the only credential that ever leaves this host
+// toward the fork relay (FORK.md B1). The root secret and the client token
+// stay local, so the relay cannot reconstruct the proxy encryption key.
+const relayTokenContext = "fork-relay-auth-v1"
+
 var identityRandomRead = rand.Read
 var identityReadFile = os.ReadFile
 var identityMkdirAll = os.MkdirAll
@@ -47,16 +52,20 @@ type edgeIdentity struct {
 	DeviceID    string `json:"device_id"`
 	RootSecret  string `json:"root_secret"`
 	ClientToken string `json:"-"`
+	RelayToken  string `json:"-"`
 }
 
 func deriveIdentity(root string) edgeIdentity {
 	digest := sha256.Sum256([]byte(root))
-	mac := hmac.New(sha256.New, []byte(root))
-	_, _ = mac.Write([]byte(clientTokenContext))
+	clientMAC := hmac.New(sha256.New, []byte(root))
+	_, _ = clientMAC.Write([]byte(clientTokenContext))
+	relayMAC := hmac.New(sha256.New, []byte(root))
+	_, _ = relayMAC.Write([]byte(relayTokenContext))
 	return edgeIdentity{
 		DeviceID:    base64.RawURLEncoding.EncodeToString(digest[:]),
 		RootSecret:  root,
-		ClientToken: base64.RawURLEncoding.EncodeToString(mac.Sum(nil)),
+		ClientToken: base64.RawURLEncoding.EncodeToString(clientMAC.Sum(nil)),
+		RelayToken:  base64.RawURLEncoding.EncodeToString(relayMAC.Sum(nil)),
 	}
 }
 
@@ -258,8 +267,11 @@ func (r *relayController) run(ctx context.Context) {
 
 func (r *relayController) connect(ctx context.Context) error {
 	endpoint := fmt.Sprintf("%s/edge/connect/%s", r.relayURL, r.identity.DeviceID)
+	// Fork scheme (FORK.md B1): the relay only ever receives the RelayToken.
+	// It never sees the root secret or client token, so it cannot derive the
+	// proxy AES key that protects /api/* and /vod/* traffic.
 	header := http.Header{
-		"Authorization":         []string{"Bearer " + r.identity.RootSecret},
+		"Authorization":         []string{"Bearer " + r.identity.RelayToken},
 		"X-Fricam-Edge-Version": []string{version},
 	}
 	conn, response, err := websocket.DefaultDialer.DialContext(ctx, endpoint, header)
