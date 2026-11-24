@@ -1044,15 +1044,33 @@ type edgeICEServer struct {
 	Credential string   `json:"credential,omitempty"`
 }
 
-var allowedCloudflareICEURLs = map[string]bool{
-	"stun:stun.cloudflare.com:3478":                true,
-	"stun:stun.cloudflare.com:53":                  true,
-	"turn:turn.cloudflare.com:3478?transport=udp":  true,
-	"turn:turn.cloudflare.com:3478?transport=tcp":  true,
-	"turns:turn.cloudflare.com:5349?transport=tcp": true,
-	"turn:turn.cloudflare.com:53?transport=udp":    true,
-	"turn:turn.cloudflare.com:80?transport=tcp":    true,
-	"turns:turn.cloudflare.com:443?transport=tcp":  true,
+// allowedICEURLs limits pass-through signaling to known STUN/TURN servers.
+// EDGE_ICE_ALLOWLIST (comma-separated) replaces the built-in Cloudflare set
+// for self-hosted TURN deployments; unset keeps the Cloudflare defaults.
+var allowedICEURLs = iceAllowlistFromEnv()
+
+func iceAllowlistFromEnv() map[string]bool {
+	defaults := map[string]bool{
+		"stun:stun.cloudflare.com:3478":                true,
+		"stun:stun.cloudflare.com:53":                  true,
+		"turn:turn.cloudflare.com:3478?transport=udp":  true,
+		"turn:turn.cloudflare.com:3478?transport=tcp":  true,
+		"turns:turn.cloudflare.com:5349?transport=tcp": true,
+		"turn:turn.cloudflare.com:53?transport=udp":    true,
+		"turn:turn.cloudflare.com:80?transport=tcp":    true,
+		"turns:turn.cloudflare.com:443?transport=tcp":  true,
+	}
+	value := strings.TrimSpace(os.Getenv("EDGE_ICE_ALLOWLIST"))
+	if value == "" {
+		return defaults
+	}
+	custom := make(map[string]bool)
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			custom[item] = true
+		}
+	}
+	return custom
 }
 
 func sanitizeSignalForGo2RTC(payload []byte) ([]byte, bool) {
@@ -1079,7 +1097,7 @@ func sanitizeSignalForGo2RTC(payload []byte) ([]byte, bool) {
 			return nil, false
 		}
 		for _, candidateURL := range server.URLs {
-			if !allowedCloudflareICEURLs[candidateURL] {
+			if !allowedICEURLs[candidateURL] {
 				return nil, false
 			}
 		}

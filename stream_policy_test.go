@@ -51,6 +51,23 @@ func TestCopyOnlySourceResolvesAliasesConservatively(t *testing.T) {
 	}
 }
 
+func TestCopyOnlySourceToleratesEnvPlaceholders(t *testing.T) {
+	streams := map[string]json.RawMessage{
+		"main": json.RawMessage(`["rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@192.0.2.101:554/Streaming/Channels/101"]`),
+		"sub":  json.RawMessage(`"rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@192.0.2.101:554/Streaming/Channels/102"`),
+	}
+	if !copyOnlySource("sub", streams, map[string]bool{}) {
+		t.Fatal("single env-placeholder rtsp source should classify as copy-only")
+	}
+	if !copyOnlySource("main", streams, map[string]bool{}) {
+		t.Fatal("env-placeholder rtsp source in a list should classify as copy-only")
+	}
+	streams["web"] = json.RawMessage(`"http://{USER}:x@192.0.2.101/stream"`)
+	if copyOnlySource("web", streams, map[string]bool{}) {
+		t.Fatal("non-rtsp source with placeholders must still be rejected")
+	}
+}
+
 func TestHDLeaseSharesSourceAndReleasesOnce(t *testing.T) {
 	m := newStreamManager(config{maxHDStreams: 1})
 	a, ok := m.acquireHD("a")

@@ -58,6 +58,22 @@ func copyOnlySource(name string, streams map[string]json.RawMessage, visiting ma
 			continue
 		}
 		u, err := url.Parse(source)
+		if err != nil {
+			// Frigate /api/config returns {ENV} placeholders unexpanded and
+			// Go rejects braces in userinfo. Credentials carry no signal for
+			// the copy-only decision, so retry without the userinfo segment.
+			if scheme := strings.Index(source, "://"); scheme >= 0 {
+				rest := source[scheme+3:]
+				authority := rest
+				if slash := strings.Index(rest, "/"); slash >= 0 {
+					authority = rest[:slash]
+				}
+				if at := strings.LastIndex(authority, "@"); at >= 0 {
+					source = source[:scheme+3] + authority[at+1:] + rest[len(authority):]
+					u, err = url.Parse(source)
+				}
+			}
+		}
 		if err != nil || (u.Scheme != "rtsp" && u.Scheme != "rtsps") {
 			return false
 		}

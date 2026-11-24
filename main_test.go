@@ -111,6 +111,19 @@ func TestEdgePeerConfigurationsKeepEdgeOnAllICE(t *testing.T) {
 	}
 }
 
+func TestICEAllowlistFromEnv(t *testing.T) {
+	t.Setenv("EDGE_ICE_ALLOWLIST", "turn:turn.example.net:3478?transport=udp, stun:stun.example.net:3478")
+	got := iceAllowlistFromEnv()
+	if !got["turn:turn.example.net:3478?transport=udp"] || !got["stun:stun.example.net:3478"] || len(got) != 2 {
+		t.Fatalf("custom allowlist = %v", got)
+	}
+	t.Setenv("EDGE_ICE_ALLOWLIST", "")
+	defaults := iceAllowlistFromEnv()
+	if !defaults["stun:stun.cloudflare.com:3478"] || len(defaults) != 8 {
+		t.Fatalf("default allowlist = %v", defaults)
+	}
+}
+
 func TestRemoteProxyPathAllowlist(t *testing.T) {
 	for _, path := range []string{
 		"/api/config",
