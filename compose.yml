@@ -45,10 +45,16 @@ services:
       SOURCE_IDLE_TIMEOUT_SEC: 60
       MAX_CACHE_MIB: 16
       # Production remote access: outbound signaling only. No tunnel or
-      # inbound public port is required.
+      # inbound public port is required. Site values live in .env beside this
+      # file — never committed to this public repo.
       EDGE_RELAY_URL: ${EDGE_RELAY_URL:-wss://relay.fricam.app}
+      # Empty keeps the built-in Cloudflare defaults; set your own TURN URLs
+      # when pointing EDGE_RELAY_URL at your own relay.
+      EDGE_ICE_ALLOWLIST: ${EDGE_ICE_ALLOWLIST:-}
       EDGE_IDENTITY_FILE: /data/identity.json
-      FRIGATE_AUTH_URL: https://127.0.0.1:8971
+      # Frigate authenticated port when it is not on loopback; must be a
+      # private address or pairing rejects it.
+      FRIGATE_AUTH_URL: ${FRIGATE_AUTH_URL:-https://127.0.0.1:8971}
     volumes:
       - fricam_edge_identity:/data
     read_only: true
