@@ -479,6 +479,32 @@ func TestAuthorizePairingExchangesBasicForFrigateToken(t *testing.T) {
 	}
 }
 
+func TestAuthorizePairingAcceptsLoginCookieToken(t *testing.T) {
+	// Một số bản Frigate trả token bằng cookie frigate_token thay vì JSON.
+	frigate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+			http.SetCookie(w, &http.Cookie{Name: "frigate_token", Value: "cookie-jwt", Path: "/"})
+			w.WriteHeader(http.StatusOK)
+		case "/api/config":
+			if r.Header.Get("Authorization") != "Bearer cookie-jwt" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer frigate.Close()
+
+	cfg := config{frigateAuthURL: frigate.URL, frigateURL: frigate.URL}
+	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("beep:secret"))
+	if !authorizePairing(context.Background(), cfg, basic) {
+		t.Fatal("login cookie token was not accepted")
+	}
+}
+
 func TestValidateFrigateAuthorizationRejectsRedirect(t *testing.T) {	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/accepted", http.StatusTemporaryRedirect)
 	}))

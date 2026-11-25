@@ -444,18 +444,41 @@ func exchangeBasicForToken(ctx context.Context, authURL, authorization string) (
 		log.Printf("edge pairing: Frigate login returned %d", resp.StatusCode)
 		return "", false
 	}
+	data, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if readErr != nil {
+		log.Printf("edge pairing: Frigate login response could not be read")
+		return "", false
+	}
 	var body struct {
 		AccessToken string `json:"access_token"`
 	}
-	if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&body) != nil {
-		log.Printf("edge pairing: Frigate login response is not JSON with access_token")
-		return "", false
+	if json.Unmarshal(data, &body) == nil && body.AccessToken != "" {
+		return body.AccessToken, true
 	}
-	if body.AccessToken == "" {
-		log.Printf("edge pairing: Frigate login response has an empty access_token")
-		return "", false
+	// Some Frigate builds hand the token back as the frigate_token cookie instead
+	// of a JSON field; the cookie value is the same JWT.
+	for _, cookie := range resp.Cookies() {
+		if cookie.Name == "frigate_token" && cookie.Value != "" {
+			log.Printf("edge pairing: Frigate login delivered a frigate_token cookie")
+			return cookie.Value, true
+		}
 	}
-	return body.AccessToken, true
+	// Never log the body (it may carry a token) — only shape, so the next run
+	// pinpoints the mismatch instead of guessing.
+	var parsed map[string]json.RawMessage
+	keys := "not-json"
+	if json.Unmarshal(data, &parsed) == nil {
+		names := make([]string, 0, len(parsed))
+		for name := range parsed {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		keys = strings.Join(names, ",")
+	}
+	log.Printf(
+		"edge pairing: Frigate login response unusable (content-type=%q, %d bytes, keys=%s)",
+		resp.Header.Get("Content-Type"), len(data), keys)
+	return "", false
 }
 
 // frigateAuthDisabled asks Frigate's internal port whether authentication is
