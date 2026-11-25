@@ -149,6 +149,7 @@ type viewBridge struct {
 	waitForVideoIDR       atomic.Bool
 	paused                atomic.Bool
 	audioUlaw             atomic.Bool
+	audioLogged           atomic.Bool
 	videoContinuity       videoRTPContinuity
 	hdContinuity          videoRTPContinuity
 	manager               *streamManager
@@ -647,6 +648,9 @@ func (b *viewBridge) forwardLocalPacket(kind webrtc.RTPCodecType, destination *w
 		for i, sample := range packet.Payload {
 			packet.Payload[i] = alawFromUlaw[sample]
 		}
+	}
+	if kind == webrtc.RTPCodecTypeAudio && b.audioLogged.CompareAndSwap(false, true) {
+		b.mark("first_audio_rtp")
 	}
 	b.mediaWriteMu.Lock()
 	if kind == webrtc.RTPCodecTypeVideo {
