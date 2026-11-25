@@ -222,6 +222,13 @@ func runEdge() error {
 		}
 		stream.serve(w, r)
 	})
+	// Frigate's API over LAN for history (#9): port 5000 lives on loopback and
+	// the app holds no Frigate credential, so the edge fronts it with the same
+	// allowlist the relay proxy uses.
+	if relay != nil {
+		mux.HandleFunc("/api/", relay.serveLocalProxy)
+		mux.HandleFunc("/vod/", relay.serveLocalProxy)
+	}
 	mux.HandleFunc("GET /webrtc", func(w http.ResponseWriter, request *http.Request) {
 		if relay == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "relay disabled"})
