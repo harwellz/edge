@@ -419,15 +419,18 @@ func frigateAuthClient() *http.Client {
 func exchangeBasicForToken(ctx context.Context, authURL, authorization string) (string, bool) {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authorization, "Basic "))
 	if err != nil {
+		log.Printf("edge pairing: Basic header is not valid base64")
 		return "", false
 	}
 	user, password, ok := strings.Cut(string(raw), ":")
 	if !ok || user == "" {
+		log.Printf("edge pairing: Basic header is not user:password")
 		return "", false
 	}
 	payload, _ := json.Marshal(map[string]string{"user": user, "password": password})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, authURL+"/api/login", bytes.NewReader(payload))
 	if err != nil {
+		log.Printf("edge pairing: Frigate login request could not be built: %v", err)
 		return "", false
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -437,14 +440,19 @@ func exchangeBasicForToken(ctx context.Context, authURL, authorization string) (
 		return "", false
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		log.Printf("edge pairing: Frigate login returned %d", resp.StatusCode)
 		return "", false
 	}
 	var body struct {
 		AccessToken string `json:"access_token"`
 	}
-	if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&body) != nil || body.AccessToken == "" {
+	if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&body) != nil {
+		log.Printf("edge pairing: Frigate login response is not JSON with access_token")
+		return "", false
+	}
+	if body.AccessToken == "" {
+		log.Printf("edge pairing: Frigate login response has an empty access_token")
 		return "", false
 	}
 	return body.AccessToken, true
