@@ -378,6 +378,7 @@ func checkFrigateAuthorization(ctx context.Context, authURL, authorization strin
 			log.Printf("edge pairing rejected: Frigate login exchange failed")
 			return false, true
 		}
+		log.Printf("edge pairing: Frigate login accepted, verifying token")
 		authorization = "Bearer " + token
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, authURL+"/api/config", nil)
