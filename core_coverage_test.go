@@ -2313,8 +2313,11 @@ func TestAuthorizationAndDiscoveryRemainingErrors(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	if !validateFrigateAuthorization(context.Background(), server.URL, "Basic abc") {
-		t.Fatal("basic rejected")
+	if validateFrigateAuthorization(
+		context.Background(), server.URL,
+		"Basic "+base64.StdEncoding.EncodeToString([]byte("u:p"))) {
+		// Basic giờ phải đổi qua /api/login; server này không có endpoint đó → reject.
+		t.Fatal("basic without a login endpoint was accepted")
 	}
 	if validateFrigateAuthorization(context.Background(), ":", "Bearer x") {
 		t.Fatal("bad URL")

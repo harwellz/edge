@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -366,23 +368,24 @@ func checkFrigateAuthorization(ctx context.Context, authURL, authorization strin
 		log.Printf("edge pairing rejected: FRIGATE_AUTH_URL %q is not a private host", authURL)
 		return false, true
 	}
+	// Frigate only accepts its own JWT (Basic is rejected on /api/config), but the
+	// app should not have to make the user fish a cookie out of the browser. Basic
+	// user:password is exchanged here for a JWT via Frigate's login endpoint — the
+	// auth port is reachable from this container and nowhere else.
+	if strings.HasPrefix(authorization, "Basic ") {
+		token, exchanged := exchangeBasicForToken(ctx, authURL, authorization)
+		if !exchanged {
+			log.Printf("edge pairing rejected: Frigate login exchange failed")
+			return false, true
+		}
+		authorization = "Bearer " + token
+	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, authURL+"/api/config", nil)
 	req.Header.Set("Authorization", authorization)
 	if strings.HasPrefix(authorization, "Bearer ") {
 		req.Header.Set("Cookie", "frigate_token="+strings.TrimPrefix(authorization, "Bearer "))
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	// This connection never leaves the Frigate host. Port 8971 commonly uses
-	// a locally generated certificate whose hostname cannot match loopback.
-	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true} //nolint:gosec
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   3 * time.Second,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	resp, err := client.Do(req)
+	resp, err := frigateAuthClient().Do(req)
 	if err != nil {
 		log.Printf("edge pairing: Frigate auth endpoint %s unreachable: %v", authURL, err)
 		return false, false
@@ -393,6 +396,57 @@ func checkFrigateAuthorization(ctx context.Context, authURL, authorization strin
 		return false, true
 	}
 	return true, true
+}
+
+// frigateAuthClient talks to the Frigate auth port, which never leaves the Frigate
+// host. Port 8971 commonly uses a locally generated certificate whose hostname
+// cannot match loopback.
+func frigateAuthClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true} //nolint:gosec
+	return &http.Client{
+		Transport: transport,
+		Timeout:   3 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+// exchangeBasicForToken turns "Basic base64(user:password)" into a Frigate JWT via
+// POST /api/login on the authenticated port. Credentials are never logged.
+func exchangeBasicForToken(ctx context.Context, authURL, authorization string) (string, bool) {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authorization, "Basic "))
+	if err != nil {
+		return "", false
+	}
+	user, password, ok := strings.Cut(string(raw), ":")
+	if !ok || user == "" {
+		return "", false
+	}
+	payload, _ := json.Marshal(map[string]string{"user": user, "password": password})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, authURL+"/api/login", bytes.NewReader(payload))
+	if err != nil {
+		return "", false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := frigateAuthClient().Do(req)
+	if err != nil {
+		log.Printf("edge pairing: Frigate login endpoint %s unreachable: %v", authURL, err)
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("edge pairing: Frigate login returned %d", resp.StatusCode)
+		return "", false
+	}
+	var body struct {
+		AccessToken string `json:"access_token"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&body) != nil || body.AccessToken == "" {
+		return "", false
+	}
+	return body.AccessToken, true
 }
 
 // frigateAuthDisabled asks Frigate's internal port whether authentication is

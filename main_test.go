@@ -429,8 +429,57 @@ func TestValidateFrigateAuthorizationStaysOnPrivateHost(t *testing.T) {
 	}
 }
 
-func TestValidateFrigateAuthorizationRejectsRedirect(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestAuthorizePairingExchangesBasicForFrigateToken(t *testing.T) {
+	// App gửi user:password; edge đổi lấy JWT qua /api/login rồi mới kiểm /api/config.
+	// Credential không bao giờ rời khỏi cặp edge↔Frigate auth.
+	frigate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+			if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+				http.Error(w, "bad login request", http.StatusBadRequest)
+				return
+			}
+			var body struct {
+				User     string `json:"user"`
+				Password string `json:"password"`
+			}
+			if json.NewDecoder(r.Body).Decode(&body) != nil || body.User != "beep" || body.Password != "s3:cret" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"access_token":"fresh-jwt","token_type":"bearer"}`)
+		case "/api/config":
+			if r.Header.Get("Authorization") != "Bearer fresh-jwt" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer frigate.Close()
+
+	basic := func(user, password string) string {
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+password))
+	}
+	cfg := config{frigateAuthURL: frigate.URL, frigateURL: frigate.URL}
+	if !authorizePairing(context.Background(), cfg, basic("beep", "s3:cret")) {
+		t.Fatal("valid Frigate account was rejected")   // password chứa ':' vẫn phải đúng
+	}
+	if authorizePairing(context.Background(), cfg, basic("beep", "wrong")) {
+		t.Fatal("wrong password was accepted")
+	}
+	if authorizePairing(context.Background(), cfg, "Basic !!!notbase64") {
+		t.Fatal("malformed Basic header was accepted")
+	}
+	if authorizePairing(context.Background(), cfg, "Basic "+base64.StdEncoding.EncodeToString([]byte("nocolon"))) {
+		t.Fatal("Basic header without ':' was accepted")
+	}
+}
+
+func TestValidateFrigateAuthorizationRejectsRedirect(t *testing.T) {	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/accepted", http.StatusTemporaryRedirect)
 	}))
 	defer server.Close()
