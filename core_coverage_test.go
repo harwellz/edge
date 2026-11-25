@@ -166,7 +166,7 @@ func TestViewStartPausedAndLiveFallback(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- bridge.start() }()
 			if !paused {
-				track := <-tracks
+				track := (<-tracks).video
 				for seq := uint16(1); ; seq++ {
 					_ = track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 96, SequenceNumber: seq, Timestamp: uint32(seq) * 3000, SSRC: 4}, Payload: []byte{0x65}})
 					select {
@@ -1734,9 +1734,14 @@ func TestViewBridgeRemoteAndBootstrap(t *testing.T) {
 	none.close()
 }
 
-func fakeGo2RTCServer(t *testing.T, withMedia bool) (*httptest.Server, <-chan *webrtc.TrackLocalStaticRTP) {
+type fakeGo2RTCMedia struct {
+	video *webrtc.TrackLocalStaticRTP
+	audio *webrtc.TrackLocalStaticRTP
+}
+
+func fakeGo2RTCServer(t *testing.T, withMedia bool) (*httptest.Server, <-chan fakeGo2RTCMedia) {
 	t.Helper()
-	videoTracks := make(chan *webrtc.TrackLocalStaticRTP, 1)
+	mediaTracks := make(chan fakeGo2RTCMedia, 1)
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	var peersMu sync.Mutex
 	var peers []*webrtc.PeerConnection
@@ -1785,7 +1790,7 @@ func fakeGo2RTCServer(t *testing.T, withMedia bool) (*httptest.Server, <-chan *w
 			if _, trackErr = peer.AddTrack(audio); trackErr != nil {
 				return
 			}
-			videoTracks <- video
+			mediaTracks <- fakeGo2RTCMedia{video: video, audio: audio}
 		}
 		if peer.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: signal.Value}) != nil {
 			return
@@ -1816,7 +1821,7 @@ func fakeGo2RTCServer(t *testing.T, withMedia bool) (*httptest.Server, <-chan *w
 			_ = peer.Close()
 		}
 	})
-	return server, videoTracks
+	return server, mediaTracks
 }
 
 func TestTalkBridgeConnectLocal(t *testing.T) {
@@ -1857,7 +1862,7 @@ func TestViewBridgeConnectLocalForwardsVideo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	track := <-tracks
+	track := (<-tracks).video
 	for i := 0; i < 100 && bridge.localVideoSSRC.Load() == 0; i++ {
 		_ = track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 96, SequenceNumber: uint16(i), Timestamp: uint32(i + 1), SSRC: 2}, Payload: []byte{0x61}})
 		time.Sleep(5 * time.Millisecond)
@@ -1914,7 +1919,7 @@ func TestViewBridgeConnectLocalStopsOnWriteError(t *testing.T) {
 	if _, err := bridge.connectLocal(ctx, video, audio, "front"); err != nil {
 		t.Fatal(err)
 	}
-	track := <-tracks
+	track := (<-tracks).video
 	for i := 0; i < 20; i++ {
 		_ = track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 96, SequenceNumber: uint16(i), Timestamp: uint32(i + 1), SSRC: 2}, Payload: []byte{0x65}})
 		time.Sleep(5 * time.Millisecond)

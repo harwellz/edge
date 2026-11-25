@@ -148,6 +148,7 @@ type viewBridge struct {
 	bootstrapWritten      atomic.Bool
 	waitForVideoIDR       atomic.Bool
 	paused                atomic.Bool
+	audioUlaw             atomic.Bool
 	videoContinuity       videoRTPContinuity
 	hdContinuity          videoRTPContinuity
 	manager               *streamManager
@@ -264,6 +265,11 @@ func mediaAPI() (*webrtc.API, error) {
 		{webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{
 			MimeType: webrtc.MimeTypePCMA, ClockRate: 8000, Channels: 1,
 		}, PayloadType: 8}, webrtc.RTPCodecTypeAudio},
+		// PCMU để camera mặc định ulaw vẫn có tiếng; alawFromUlaw chuyển sang PCMA
+		// trước khi ghi vào track phía client.
+		{webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1,
+		}, PayloadType: 0}, webrtc.RTPCodecTypeAudio},
 		{webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{
 			MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
 			SDPFmtpLine: "minptime=10;useinbandfec=1",
@@ -502,8 +508,30 @@ func (b *viewBridge) connectLocal(
 	}); err != nil {
 		return nil, err
 	}
-	if _, err = peerAddTransceiverFromKind(peer, webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{
+	audioTransceiver, err := peerAddTransceiverFromKind(peer, webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{
 		Direction: webrtc.RTPTransceiverDirectionRecvonly,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// go2rtc xếp Opus trước PCMA khi client offer cả hai (internal/ffmpeg/producer.go),
+	// nhưng track phía client luôn là PCMA/8 (start()) → Opus tới đây sẽ bị dán nhãn
+	// PCMA và app nghe rác. Ép leg go2rtc chỉ G.711: go2rtc tự transcode (PCML → PCMA,
+	// pkg/webrtc.AddTrack ClockRate 0) thay vì gửi Opus.
+	// PCMU có mặt vì camera mặc định là ulaw; alawFromUlaw đổi sang PCMA khi forward.
+	if err = audioTransceiver.SetCodecPreferences([]webrtc.RTPCodecParameters{
+		{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType: webrtc.MimeTypePCMA, ClockRate: 8000, Channels: 1,
+			},
+			PayloadType: 8,
+		},
+		{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1,
+			},
+			PayloadType: 0,
+		},
 	}); err != nil {
 		return nil, err
 	}
@@ -511,6 +539,8 @@ func (b *viewBridge) connectLocal(
 	var firstVideoOnce sync.Once
 	peer.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		destination := audio
+		b.audioUlaw.Store(track.Kind() == webrtc.RTPCodecTypeAudio &&
+			track.Codec().MimeType == webrtc.MimeTypePCMU)
 		if track.Kind() == webrtc.RTPCodecTypeVideo {
 			destination = video
 			b.localVideoSSRC.Store(uint32(track.SSRC()))
@@ -612,6 +642,11 @@ func (b *viewBridge) forwardLocalPacket(kind webrtc.RTPCodecType, destination *w
 			return true
 		}
 		b.waitForVideoIDR.Store(false)
+	}
+	if kind == webrtc.RTPCodecTypeAudio && b.audioUlaw.Load() {
+		for i, sample := range packet.Payload {
+			packet.Payload[i] = alawFromUlaw[sample]
+		}
 	}
 	b.mediaWriteMu.Lock()
 	if kind == webrtc.RTPCodecTypeVideo {
