@@ -148,7 +148,6 @@ type viewBridge struct {
 	bootstrapWritten      atomic.Bool
 	waitForVideoIDR       atomic.Bool
 	paused                atomic.Bool
-	audioUlaw             atomic.Bool
 	audioLogged           atomic.Bool
 	videoContinuity       videoRTPContinuity
 	hdContinuity          videoRTPContinuity
@@ -302,6 +301,17 @@ func newWebRTCAPI(engine *webrtc.MediaEngine) (*webrtc.API, error) {
 	), nil
 }
 
+// clientAudioCodecParams: track audio phía app. Opus vì libwebrtc giải mã native,
+// wideband từ nguồn AAC 16 kHz, có inband FEC (chịu mất gói tốt hơn G.711 trên LTE).
+// Leg go2rtc dùng cùng codec này — Pion không chuyển codec hộ.
+var clientAudioCodecParams = webrtc.RTPCodecParameters{
+	RTPCodecCapability: webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
+		SDPFmtpLine: "minptime=10;useinbandfec=1",
+	},
+	PayloadType: 111,
+}
+
 func (b *viewBridge) start() error {
 	ctx, cancel := context.WithTimeout(b.ctx, viewBridgeTimeout)
 	defer cancel()
@@ -315,10 +325,7 @@ func (b *viewBridge) start() error {
 	if err != nil {
 		return err
 	}
-	audio, err := newRTPTrack(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA, ClockRate: 8000, Channels: 1},
-		"audio", "fricam-edge",
-	)
+	audio, err := newRTPTrack(clientAudioCodecParams.RTPCodecCapability, "audio", "fricam-edge")
 	if err != nil {
 		return err
 	}
@@ -515,24 +522,10 @@ func (b *viewBridge) connectLocal(
 	if err != nil {
 		return nil, err
 	}
-	// go2rtc xếp Opus trước PCMA khi client offer cả hai (internal/ffmpeg/producer.go),
-	// nhưng track phía client luôn là PCMA/8 (start()) → Opus tới đây sẽ bị dán nhãn
-	// PCMA và app nghe rác. Ép leg go2rtc chỉ G.711: go2rtc tự transcode (PCML → PCMA,
-	// pkg/webrtc.AddTrack ClockRate 0) thay vì gửi Opus.
-	// PCMU có mặt vì camera mặc định là ulaw; alawFromUlaw đổi sang PCMA khi forward.
+	// Track phía client là Opus/48k (start()) nên leg go2rtc cũng chỉ offer Opus:
+	// go2rtc tự transcode nguồn (AAC, G.711, …) → Opus.
 	if err = audioTransceiver.SetCodecPreferences([]webrtc.RTPCodecParameters{
-		{
-			RTPCodecCapability: webrtc.RTPCodecCapability{
-				MimeType: webrtc.MimeTypePCMA, ClockRate: 8000, Channels: 1,
-			},
-			PayloadType: 8,
-		},
-		{
-			RTPCodecCapability: webrtc.RTPCodecCapability{
-				MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1,
-			},
-			PayloadType: 0,
-		},
+		clientAudioCodecParams,
 	}); err != nil {
 		return nil, err
 	}
@@ -540,8 +533,6 @@ func (b *viewBridge) connectLocal(
 	var firstVideoOnce sync.Once
 	peer.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		destination := audio
-		b.audioUlaw.Store(track.Kind() == webrtc.RTPCodecTypeAudio &&
-			track.Codec().MimeType == webrtc.MimeTypePCMU)
 		if track.Kind() == webrtc.RTPCodecTypeVideo {
 			destination = video
 			b.localVideoSSRC.Store(uint32(track.SSRC()))
@@ -621,6 +612,17 @@ func (b *viewBridge) connectLocal(
 		return nil, err
 	}
 	b.mark("local_answer_set")
+	// Guard: 2s không có gói audio nào = nguồn/go2rtc không cấp được Opus (vd. thiếu
+	// libopus trong ffmpeg). Không có log này thì triệu chứng chỉ là "im tiếng".
+	go func() {
+		select {
+		case <-time.After(2 * time.Second):
+			if !b.audioLogged.Load() {
+				b.mark("audio_unavailable")
+			}
+		case <-ctx.Done():
+		}
+	}()
 	return firstVideo, nil
 }
 
@@ -643,11 +645,6 @@ func (b *viewBridge) forwardLocalPacket(kind webrtc.RTPCodecType, destination *w
 			return true
 		}
 		b.waitForVideoIDR.Store(false)
-	}
-	if kind == webrtc.RTPCodecTypeAudio && b.audioUlaw.Load() {
-		for i, sample := range packet.Payload {
-			packet.Payload[i] = alawFromUlaw[sample]
-		}
 	}
 	if kind == webrtc.RTPCodecTypeAudio && b.audioLogged.CompareAndSwap(false, true) {
 		b.mark("first_audio_rtp")

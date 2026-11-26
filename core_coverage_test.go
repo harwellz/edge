@@ -1780,7 +1780,7 @@ func fakeGo2RTCServer(t *testing.T, withMedia bool) (*httptest.Server, <-chan fa
 			if trackErr != nil {
 				return
 			}
-			audio, trackErr := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA, ClockRate: 8000, Channels: 1}, "audio", "go2rtc")
+			audio, trackErr := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, "audio", "go2rtc")
 			if trackErr != nil {
 				return
 			}
